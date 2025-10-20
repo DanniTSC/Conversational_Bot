@@ -1,0 +1,11 @@
+wake_phrases:
+  - "hello robot"
+  - "hey robot"
+  - "salut robot"
+  - "hei robot"
+  - "bună robot"
+  - "buna robot"
+
+acknowledgement:
+  ro: "Da, te ascult."
+  en: "Yes, I'm listening."

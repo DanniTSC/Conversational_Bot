@@ -1,0 +1,8 @@
+provider: ollama
+host: "http://127.0.0.1:11434"
+model: "llama3.2"
+max_tokens: 120
+temperature: 0.4
+language_policy: auto
+system_prompt: >
+  Ești un asistent pentru un robot umanoid. Răspunzi scurt, clar și politicos.

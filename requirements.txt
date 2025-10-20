@@ -1,0 +1,22 @@
+# Core audio I/O
+sounddevice==0.4.6
+soundfile==0.12.1
+webrtcvad==2.0.14
+PyYAML==6.0.2
+numpy==1.26.4
+
+# Speech-to-text (ASR)
+faster-whisper==1.0.3
+
+# Text-to-speech (TTS)
+pyttsx3==2.91
+
+# LLM / HTTP
+requests==2.32.3
+
+# Logging / dev utilities
+coloredlogs==15.0.1
+
+# (Optional) quality-of-life tools
+tqdm==4.66.5
+rapidfuzz==3.9.6

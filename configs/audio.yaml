@@ -1,0 +1,5 @@
+sample_rate: 16000
+block_ms: 30          # 10 / 20 / 30 ms (webrtcvad acceptă doar aceste valori)
+vad_aggressiveness: 2 # 0..3 (3 = mai agresiv)
+silence_ms_to_end: 600
+max_record_seconds: 30
