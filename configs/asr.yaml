@@ -8,3 +8,5 @@ block_ms: 30
 vad_aggressiveness: 2
 silence_ms_to_end: 10000
 max_record_seconds: 8
+
+force_language: en

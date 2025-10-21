@@ -1,3 +1,4 @@
+# src/app.py
 from src.states import BotState
 from src.logger import setup_logger
 from src.config import load_all
@@ -6,7 +7,9 @@ from src.asr.engine_openai import ASREngine
 from src.llm.engine import LLMLocal
 from src.tts.engine import TTSLocal
 from src.wake import WakeDetector
+from src.utils.textnorm import normalize_text
 from pathlib import Path
+import time
 
 
 LANG_MAP = {"ro": "ro", "en": "en"}
@@ -18,6 +21,17 @@ def _lang_from_code(code: str) -> str:
             return LANG_MAP[k]
     return "en"
 
+def is_goodbye(text: str) -> bool:
+    """Detectează comenzi de închidere a sesiunii (ex. 'ok bye')."""
+    t = normalize_text(text)
+    if not t:
+        return False
+    bye_phrases = [
+        "ok bye", "okay bye", "bye", "goodbye", "stop", "cancel", "enough",
+        "gata", "la revedere", "opreste", "oprim", "terminam", "pa"
+    ]
+    return any(p in t for p in bye_phrases)
+
 def main():
     logger = setup_logger()
     cfg = load_all()
@@ -25,7 +39,12 @@ def main():
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Engines
-    asr = ASREngine(cfg["asr"]["model_size"], cfg["asr"]["compute_type"], cfg["asr"].get("device", "cpu"))
+    asr = ASREngine(
+        cfg["asr"]["model_size"],
+        cfg["asr"]["compute_type"],
+        cfg["asr"].get("device", "cpu"),
+        cfg["asr"].get("force_language"),   # opțional: en/ro/None
+    )
     llm = LLMLocal(cfg["llm"], logger)
     tts = TTSLocal(cfg["tts"], logger)
 
@@ -40,21 +59,32 @@ def main():
     try:
         while True:
             # ——— STANDBY: ascultă până detectează wake ———
+            standby_cfg = dict(cfg["audio"])
+            standby_cfg.update({
+                "silence_ms_to_end": 1000,   # dă timp să spui wake-ul complet
+                "max_record_seconds": 4,     # probe scurte în standby
+                "vad_aggressiveness": 3,     # mai agresiv la zgomot
+            })
             standby_wav = data_dir / "cache" / "standby.wav"
             standby_wav.parent.mkdir(parents=True, exist_ok=True)
-            path, _ = record_until_silence(cfg["audio"], standby_wav, logger)
+            path, dur = record_until_silence(standby_cfg, standby_wav, logger)
 
-            result = asr.transcribe(path)
-            heard_text = result["text"]
-            heard_lang = _lang_from_code(result.get("lang", "en"))
-            # debug scoruri
+            if dur < float(cfg["audio"].get("min_valid_seconds", 0.7)):
+                logger.info(f"⏭️ standby prea scurt (dur={dur:.2f}s) — reiau")
+                continue
+
+            # Forțăm EN în standby ca să evităm detectări greșite de limbă
+            result = asr.transcribe(path, language_override="en")
+            heard_text = (result.get("text") or "").strip()
+            heard_lang = "en"
+
+            # debug scoruri pentru wake
             scores = wake.debug_scores(heard_text)
             logger.info(f"👂 [standby:{heard_lang}] {heard_text} | wake-scores: {scores}")
 
             if not heard_text:
                 continue
 
-            logger.info(f"👂 [standby:{heard_lang}] {heard_text}")
             matched = wake.match(heard_text)
             if not matched:
                 continue  # nu e wake, rămânem în standby
@@ -64,29 +94,57 @@ def main():
             ack = ack_ro if heard_lang == "ro" else ack_en
             tts.say(ack, lang=heard_lang)
 
-            # ——— UN TUR DE CONVERSAȚIE: user întreabă, bot răspunde ———
-            user_wav = data_dir / "cache" / "user_utt.wav"
-            path_user, _ = record_until_silence(cfg["audio"], user_wav, logger)
+            # ——— SESIUNE MULTI-TURN până la "ok bye" sau timeout ———
+            ask_cfg = dict(cfg["audio"])
+            ask_cfg.update({
+                "silence_ms_to_end": 1000,   # nu tăia finalul propozițiilor
+                "max_record_seconds": 10,
+                "vad_aggressiveness": 2,     # mai iertător în conversație
+            })
+            session_idle_seconds = int(cfg["audio"].get("session_idle_seconds", 12))
+            last_activity = time.time()
 
-            state = BotState.THINKING
-            asr_res = asr.transcribe(path_user)
-            user_text = asr_res["text"]
-            user_lang = _lang_from_code(asr_res.get("lang", "en"))
-            logger.info(f"🧏 [{user_lang}] {user_text}")
-
-            if not user_text:
-                logger.info("N-am înțeles întrebarea. Revin în standby.")
-                continue
-
-            reply = llm.generate(user_text, lang_hint=user_lang)
-            logger.info(f"💬 Răspuns: {reply}")
-
-            state = BotState.SPEAKING
-            tts.say(reply, lang=user_lang)
-
-            # ——— revenim în standby după un singur schimb ———
+            logger.info("🟢 Sesiune activă (spune „ok bye” ca să închizi).")
             state = BotState.LISTENING
-            logger.info("⏳ Standby (spune din nou wake-phrase pentru următoarea întrebare).")
+
+            while time.time() - last_activity < session_idle_seconds:
+                user_wav = data_dir / "cache" / "user_utt.wav"
+                path_user, dur = record_until_silence(ask_cfg, user_wav, logger)
+
+                # ignoră capturile foarte scurte (respirații, click-uri, tuse)
+                if dur < 0.7:
+                    continue
+
+                state = BotState.THINKING
+                # dacă vrei bilingv, pune language_override=None
+                asr_res = asr.transcribe(path_user, language_override="en")
+                user_text = (asr_res.get("text") or "").strip()
+                user_lang = _lang_from_code(asr_res.get("lang", "en"))
+                logger.info(f"🧏 [{user_lang}] {user_text}")
+
+                if not user_text:
+                    continue
+
+                # închidere sesiune pe "ok bye"
+                if is_goodbye(user_text):
+                    state = BotState.SPEAKING
+                    tts.say("Okay, bye!", lang="en")
+                    logger.info("🔴 Sesiune închisă de utilizator (ok bye).")
+                    break
+
+                # Răspuns normal
+                reply = llm.generate(user_text, lang_hint="en")  # menții ENG în sesiune
+                logger.info(f"💬 Răspuns: {reply}")
+
+                state = BotState.SPEAKING
+                tts.say(reply, lang="en")
+
+                # prelungește fereastra de inactivitate la fiecare schimb valid
+                last_activity = time.time()
+
+            # ——— ieșire din sesiune => revenire în standby ———
+            state = BotState.LISTENING
+            logger.info("⏳ Revenire în standby (spune din nou wake-phrase pentru o nouă sesiune).")
 
     except KeyboardInterrupt:
         logger.info("Bye!")
