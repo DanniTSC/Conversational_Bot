@@ -6,7 +6,8 @@ PyYAML==6.0.2
 numpy==1.26.4
 
 # Speech-to-text (ASR)
-faster-whisper==1.0.3
+#faster-whisper==1.0.3
+openai-whisper==20231117
 
 # Text-to-speech (TTS)
 pyttsx3==2.91

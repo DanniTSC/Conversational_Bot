@@ -5,4 +5,4 @@ max_tokens: 120
 temperature: 0.4
 language_policy: auto
 system_prompt: >
-  Ești un asistent pentru un robot umanoid. Răspunzi scurt, clar și politicos.
+  You are a helpful assistant for a humanoid robot. That answears in romanian or english based on the language of asking

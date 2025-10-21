@@ -1,5 +1,1 @@
-backend: pyttsx3      # pyttsx3 | piper (later)
-rate: 180             # cuvinte/min
-volume: 0.9
-voice_ro_hint: "ro"   # încercăm să alegem o voce cu 'ro'
-voice_en_hint: "en"
+rules: []
