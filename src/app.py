@@ -1,12 +1,13 @@
 # src/app.py
-from src.states import BotState
-from src.logger import setup_logger
-from src.config import load_all
+from src.core.states import BotState
+from src.core.logger import setup_logger
+from src.core.config import load_all
 from src.audio.input import record_until_silence
 from src.asr.engine_openai import ASREngine
 from src.llm.engine import LLMLocal
 from src.tts.engine import TTSLocal
-from src.wake import WakeDetector
+from src.core.wake import WakeDetector
+from src.telemetry.metrics import boot_metrics
 from src.utils.textnorm import normalize_text
 from pathlib import Path
 import time
@@ -34,6 +35,8 @@ def is_goodbye(text: str) -> bool:
 
 def main():
     logger = setup_logger()
+    addr, port = boot_metrics()
+    logger.info(f"📈 Metrics UI: http://{addr}:{port}/vitals  |  Prometheus: http://{addr}:{port}/metrics")
     cfg = load_all()
     data_dir = Path(cfg["paths"]["data"])
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -133,7 +136,7 @@ def main():
                     break
 
                 # Răspuns normal
-                reply = llm.generate(user_text, lang_hint="en")  # menții ENG în sesiune
+                reply = llm.generate(user_text, lang_hint="en", mode = "precise")  # menții ENG în sesiune
                 logger.info(f"💬 Răspuns: {reply}")
 
                 state = BotState.SPEAKING

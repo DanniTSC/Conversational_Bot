@@ -1,14 +1,14 @@
 # src/llm/engine.py
 from __future__ import annotations
-from typing import Dict
+from typing import Dict, Optional
 import os, requests, json
+from src.telemetry.metrics import observe_hist, llm_latency, llm_first_token_latency, wrap_stream_for_first_token
 
 class LLMLocal:
     def __init__(self, cfg: Dict, logger):
         self.cfg = cfg or {}
         self.log = logger
 
-        # Acceptă fie "provider", fie "backend" (alias)
         provider = (self.cfg.get("provider") or self.cfg.get("backend") or "rule").lower()
         if provider == "echo":
             provider = "rule"
@@ -16,11 +16,13 @@ class LLMLocal:
 
         self.system = self.cfg.get("system_prompt", "")
         self.host = self.cfg.get("host", "http://localhost:11434")
-        self.model = self.cfg.get("model", "llama3.1:8b-instruct")
+        self.model = self.cfg.get("model", "llama3.2")
         self.max_tokens = int(self.cfg.get("max_tokens", 120))
         self.temperature = float(self.cfg.get("temperature", 0.4))
 
-        # OpenAI optional
+        self.default_mode = (self.cfg.get("default_mode") or "precise").lower()
+        self.strict_facts = bool(self.cfg.get("strict_facts", True))
+
         self._openai = None
         if self.provider == "openai":
             try:
@@ -32,40 +34,115 @@ class LLMLocal:
 
         self.log.info(f"LLM provider activ: {self.provider}")
 
-    def generate(self, user_text: str, lang_hint: str = "en") -> str:
-        if self.provider == "rule":
-            return self._rule_based(user_text, lang_hint)
+    def generate(self, user_text: str, lang_hint: str = "en", mode: Optional[str] = None) -> str:
+        mode = (mode or self.default_mode).lower()
+        with observe_hist(llm_latency):
+            if self.provider == "rule":
+                return self._rule_based(user_text, lang_hint)
+            if self.provider == "ollama":
+                return self._ollama_http(user_text, lang_hint, mode=mode)
+            if self.provider == "openai" and self._openai:
+                return self._openai_chat(user_text, lang_hint)
+            return "No LLM provider configured."
+
+    def generate_stream(self, user_text: str, lang_hint: str = "en", mode: Optional[str] = None):
+        mode = (mode or self.default_mode).lower()
+        # time-to-first-token
         if self.provider == "ollama":
-            return self._ollama_http(user_text, lang_hint)
-        if self.provider == "openai" and self._openai:
-            return self._openai_chat(user_text, lang_hint)
-        return "No LLM provider configured."
+            gen = self._ollama_stream(user_text, lang_hint, mode)
+            return wrap_stream_for_first_token(gen, llm_first_token_latency)
+        # fallback: non-stream
+        def _one():
+            yield self.generate(user_text, lang_hint, mode)
+        return _one()
 
     def _rule_based(self, user_text: str, lang_hint: str) -> str:
         if not (user_text or "").strip():
             return "Nu am auzit întrebarea. Poți repeta?"
         return f"{'Am înțeles' if lang_hint.startswith('ro') else 'I heard'}: \"{user_text}\"."
 
-    def _ollama_http(self, user_text: str, lang_hint: str) -> str:
+    def _ollama_http(self, user_text: str, lang_hint: str, mode: str = "precise") -> str:
         url = f"{self.host.rstrip('/')}/api/generate"
-        prompt = f"{self.system}\nUser ({lang_hint}): {user_text}\nAssistant:"
+
+        if mode == "precise":
+            safety = (
+                "IMPORTANT: Answer only with verified facts. "
+                "If you are uncertain or the information may be outdated, say "
+                "'Nu știu cu certitudine' and suggest checking a reliable source. "
+                "Never invent names, dates, or sources. Be concise."
+            )
+            temperature = 0.0; top_p = 0.9; top_k = 40
+        else:
+            safety = "Be helpful and friendly."
+            temperature = self.temperature; top_p = 0.95; top_k = 50
+
+        sys = (self.system or "").strip()
+        preface = f"{sys}\n{safety}".strip()
+        prompt = f"{preface}\nUser ({lang_hint}): {user_text}\nAssistant:"
+
         try:
             resp = requests.post(url, json={
                 "model": self.model,
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": self.temperature,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    "repeat_penalty": 1.1,
                     "num_predict": self.max_tokens
                 }
             }, timeout=120)
             resp.raise_for_status()
             data = resp.json()
-            # pentru /api/generate, răspunsul e în "response"
-            return (data.get("response") or "").strip() or "…"
+            text = (data.get("response") or "").strip()
+            if self.strict_facts and not text:
+                return "Nu știu cu certitudine. Vrei să verific o sursă?"
+            return text or "…"
         except Exception as e:
             self.log.error(f"Ollama HTTP error: {e}")
             return self._rule_based(user_text, lang_hint)
+
+    def _ollama_stream(self, user_text: str, lang_hint: str, mode: str = "precise"):
+        url = f"{self.host.rstrip('/')}/api/generate"
+
+        if mode == "precise":
+            safety = (
+                "IMPORTANT: Answer only with verified facts. "
+                "If uncertain or outdated, reply exactly with: 'Nu știu cu certitudine.' "
+                "Keep answers concise."
+            )
+            temperature = 0.0; top_p = 0.9; top_k = 40
+        else:
+            safety = "Be helpful and friendly."
+            temperature = self.temperature; top_p = 0.95; top_k = 50
+
+        sys = (self.system or "").strip()
+        prompt = f"{sys}\n{safety}\nUser ({lang_hint}): {user_text}\nAssistant:"
+
+        with requests.post(url, json={
+            "model": self.model,
+            "prompt": prompt,
+            "stream": True,
+            "options": {
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "repeat_penalty": 1.1,
+                "num_predict": self.max_tokens
+            }
+        }, stream=True, timeout=120) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    tok = (data.get("response") or "")
+                    if tok:
+                        yield tok
+                except Exception:
+                    continue
 
     def _openai_chat(self, user_text: str, lang_hint: str) -> str:
         try:

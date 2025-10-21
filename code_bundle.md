@@ -38,6 +38,8 @@
    6  language_policy: auto
    7  system_prompt: >
    8    You are a helpful assistant for a humanoid robot. That answears in romanian or english based on the language of asking
+   9  default_mode: precise         
+  10  strict_facts: true  #daca nu stie spune ca nu stie 
 ```
 
 ---
@@ -238,7 +240,7 @@
  133                      break
  134  
  135                  # Răspuns normal
- 136                  reply = llm.generate(user_text, lang_hint="en")  # menții ENG în sesiune
+ 136                  reply = llm.generate(user_text, lang_hint="en", mode = "precise")  # menții ENG în sesiune
  137                  logger.info(f"💬 Răspuns: {reply}")
  138  
  139                  state = BotState.SPEAKING
@@ -560,7 +562,7 @@
 ```python
    1  # src/llm/engine.py
    2  from __future__ import annotations
-   3  from typing import Dict
+   3  from typing import Dict, Optional
    4  import os, requests, json
    5  
    6  class LLMLocal:
@@ -568,81 +570,113 @@
    8          self.cfg = cfg or {}
    9          self.log = logger
   10  
-  11          # Acceptă fie "provider", fie "backend" (alias)
-  12          provider = (self.cfg.get("provider") or self.cfg.get("backend") or "rule").lower()
-  13          if provider == "echo":
-  14              provider = "rule"
-  15          self.provider = provider
-  16  
-  17          self.system = self.cfg.get("system_prompt", "")
-  18          self.host = self.cfg.get("host", "http://localhost:11434")
-  19          self.model = self.cfg.get("model", "llama3.1:8b-instruct")
-  20          self.max_tokens = int(self.cfg.get("max_tokens", 120))
-  21          self.temperature = float(self.cfg.get("temperature", 0.4))
-  22  
-  23          # OpenAI optional
-  24          self._openai = None
-  25          if self.provider == "openai":
-  26              try:
-  27                  from openai import OpenAI
-  28                  self._openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-  29              except Exception as e:
-  30                  self.log.error(f"OpenAI client indisponibil: {e}. Revin pe 'rule'.")
-  31                  self.provider = "rule"
-  32  
-  33          self.log.info(f"LLM provider activ: {self.provider}")
+  11          provider = (self.cfg.get("provider") or self.cfg.get("backend") or "rule").lower()
+  12          if provider == "echo":
+  13              provider = "rule"
+  14          self.provider = provider
+  15  
+  16          self.system = self.cfg.get("system_prompt", "")
+  17          self.host = self.cfg.get("host", "http://localhost:11434")
+  18          self.model = self.cfg.get("model", "llama3.2")
+  19          self.max_tokens = int(self.cfg.get("max_tokens", 120))
+  20          self.temperature = float(self.cfg.get("temperature", 0.4))
+  21  
+  22          # noi:
+  23          self.default_mode = (self.cfg.get("default_mode") or "precise").lower()   # precise | creative
+  24          self.strict_facts = bool(self.cfg.get("strict_facts", True))
+  25  
+  26          self._openai = None
+  27          if self.provider == "openai":
+  28              try:
+  29                  from openai import OpenAI
+  30                  self._openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+  31              except Exception as e:
+  32                  self.log.error(f"OpenAI client indisponibil: {e}. Revin pe 'rule'.")
+  33                  self.provider = "rule"
   34  
-  35      def generate(self, user_text: str, lang_hint: str = "en") -> str:
-  36          if self.provider == "rule":
-  37              return self._rule_based(user_text, lang_hint)
-  38          if self.provider == "ollama":
-  39              return self._ollama_http(user_text, lang_hint)
-  40          if self.provider == "openai" and self._openai:
-  41              return self._openai_chat(user_text, lang_hint)
-  42          return "No LLM provider configured."
-  43  
-  44      def _rule_based(self, user_text: str, lang_hint: str) -> str:
-  45          if not (user_text or "").strip():
-  46              return "Nu am auzit întrebarea. Poți repeta?"
-  47          return f"{'Am înțeles' if lang_hint.startswith('ro') else 'I heard'}: \"{user_text}\"."
-  48  
-  49      def _ollama_http(self, user_text: str, lang_hint: str) -> str:
-  50          url = f"{self.host.rstrip('/')}/api/generate"
-  51          prompt = f"{self.system}\nUser ({lang_hint}): {user_text}\nAssistant:"
-  52          try:
-  53              resp = requests.post(url, json={
-  54                  "model": self.model,
-  55                  "prompt": prompt,
-  56                  "stream": False,
-  57                  "options": {
-  58                      "temperature": self.temperature,
-  59                      "num_predict": self.max_tokens
-  60                  }
-  61              }, timeout=120)
-  62              resp.raise_for_status()
-  63              data = resp.json()
-  64              # pentru /api/generate, răspunsul e în "response"
-  65              return (data.get("response") or "").strip() or "…"
-  66          except Exception as e:
-  67              self.log.error(f"Ollama HTTP error: {e}")
-  68              return self._rule_based(user_text, lang_hint)
-  69  
-  70      def _openai_chat(self, user_text: str, lang_hint: str) -> str:
-  71          try:
-  72              msg = [
-  73                  {"role": "system", "content": self.system or "You are concise."},
-  74                  {"role": "user", "content": f"[lang={lang_hint}] {user_text}"},
-  75              ]
-  76              r = self._openai.chat.completions.create(
-  77                  model=self.cfg.get("model", "gpt-4o-mini"),
-  78                  messages=msg,
-  79                  temperature=self.temperature,
-  80                  max_tokens=self.max_tokens
-  81              )
-  82              return (r.choices[0].message.content or "").strip()
-  83          except Exception as e:
-  84              self.log.error(f"OpenAI error: {e}")
-  85              return self._rule_based(user_text, lang_hint)
+  35          self.log.info(f"LLM provider activ: {self.provider}")
+  36  
+  37      # === API public: poți pasa mode="precise" sau "creative" din app.py ===
+  38      def generate(self, user_text: str, lang_hint: str = "en", mode: Optional[str] = None) -> str:
+  39          mode = (mode or self.default_mode).lower()
+  40          if self.provider == "rule":
+  41              return self._rule_based(user_text, lang_hint)
+  42          if self.provider == "ollama":
+  43              return self._ollama_http(user_text, lang_hint, mode=mode)
+  44          if self.provider == "openai" and self._openai:
+  45              return self._openai_chat(user_text, lang_hint)
+  46          return "No LLM provider configured."
+  47  
+  48      def _rule_based(self, user_text: str, lang_hint: str) -> str:
+  49          if not (user_text or "").strip():
+  50              return "Nu am auzit întrebarea. Poți repeta?"
+  51          return f"{'Am înțeles' if lang_hint.startswith('ro') else 'I heard'}: \"{user_text}\"."
+  52  
+  53      def _ollama_http(self, user_text: str, lang_hint: str, mode: str = "precise") -> str:
+  54          url = f"{self.host.rstrip('/')}/api/generate"
+  55  
+  56          # gard de siguranță în prompt
+  57          if mode == "precise":
+  58              safety = (
+  59                  "IMPORTANT: Answer only with verified facts. "
+  60                  "If you are uncertain or the information may be outdated, say "
+  61                  "'Nu știu cu certitudine' and suggest checking a reliable source. "
+  62                  "Never invent names, dates, or sources. Be concise."
+  63              )
+  64              temperature = 0.0
+  65              top_p = 0.9
+  66              top_k = 40
+  67          else:
+  68              safety = "Be helpful and friendly."
+  69              temperature = self.temperature
+  70              top_p = 0.95
+  71              top_k = 50
+  72  
+  73          sys = (self.system or "").strip()
+  74          preface = f"{sys}\n{safety}".strip()
+  75          prompt = f"{preface}\nUser ({lang_hint}): {user_text}\nAssistant:"
+  76  
+  77          try:
+  78              resp = requests.post(url, json={
+  79                  "model": self.model,
+  80                  "prompt": prompt,
+  81                  "stream": False,
+  82                  "options": {
+  83                      "temperature": temperature,
+  84                      "top_p": top_p,
+  85                      "top_k": top_k,
+  86                      "repeat_penalty": 1.1,
+  87                      "num_predict": self.max_tokens
+  88                  }
+  89              }, timeout=120)
+  90              resp.raise_for_status()
+  91              data = resp.json()
+  92              text = (data.get("response") or "").strip()
+  93  
+  94              # opțional: dacă strict_facts și textul pare “inventat”, întoarce fallback
+  95              if self.strict_facts and not text:
+  96                  return "Nu știu cu certitudine. Vrei să verific o sursă?"
+  97              return text or "…"
+  98          except Exception as e:
+  99              self.log.error(f"Ollama HTTP error: {e}")
+ 100              return self._rule_based(user_text, lang_hint)
+ 101  
+ 102      def _openai_chat(self, user_text: str, lang_hint: str) -> str:
+ 103          try:
+ 104              msg = [
+ 105                  {"role": "system", "content": self.system or "You are concise."},
+ 106                  {"role": "user", "content": f"[lang={lang_hint}] {user_text}"},
+ 107              ]
+ 108              r = self._openai.chat.completions.create(
+ 109                  model=self.cfg.get("model", "gpt-4o-mini"),
+ 110                  messages=msg,
+ 111                  temperature=self.temperature,
+ 112                  max_tokens=self.max_tokens
+ 113              )
+ 114              return (r.choices[0].message.content or "").strip()
+ 115          except Exception as e:
+ 116              self.log.error(f"OpenAI error: {e}")
+ 117              return self._rule_based(user_text, lang_hint)
 ```
 
 ---

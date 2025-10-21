@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import whisper
 
+# metrics
+from src.telemetry.metrics import observe_hist, asr_latency
+
 class ASREngine:
     def __init__(
         self,
@@ -21,15 +24,16 @@ class ASREngine:
 
     def transcribe(self, wav_path: str | Path, language_override: Optional[str] = None) -> Dict[str, Any]:
         lang = (language_override or self.force_language or None)
-        res = self.model.transcribe(
-            str(wav_path),
-            fp16=self.fp16,
-            language=lang,                     # <- forțăm limba dacă e setată
-            temperature=0.0,                   # mai puțină “imaginație”
-            condition_on_previous_text=False,
-            no_speech_threshold=0.6,           # filtrează “aer”
-            logprob_threshold=-0.5,            # aruncă rezultate foarte improbabile
-        )
+        with observe_hist(asr_latency):
+            res = self.model.transcribe(
+                str(wav_path),
+                fp16=self.fp16,
+                language=lang,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+                logprob_threshold=-0.5,
+            )
         text = (res.get("text") or "").strip()
         out_lang = res.get("language") or (lang or "en")
         return {"text": text, "lang": out_lang, "language_probability": 0.0}

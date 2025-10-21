@@ -6,3 +6,5 @@ temperature: 0.4
 language_policy: auto
 system_prompt: >
   You are a helpful assistant for a humanoid robot. That answears in romanian or english based on the language of asking
+default_mode: precise         
+strict_facts: true  #daca nu stie spune ca nu stie 
