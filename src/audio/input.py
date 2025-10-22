@@ -1,16 +1,22 @@
 # src/audio/input.py
 import queue, time, struct
 from pathlib import Path
-
+from .devices import choose_input_device, list_input_devices 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+from .vad import VAD
+from .devices import choose_input_device
+from .processing import AudioEffects
 
-from .vad import VAD  # sau: from src.audio.vad import VAD
+# Import opțional: nu crăpa dacă nu există webrtc AEC
+try:
+    from .aec_webrtc import WebRTCAEC  # opțional
+except Exception:
+    WebRTCAEC = None
 
 
 def _float_to_int16(audio_f32: np.ndarray) -> np.ndarray:
-    """Convert [-1, 1] float32 to int16 PCM."""
     audio_f32 = np.clip(audio_f32, -1.0, 1.0)
     return (audio_f32 * 32767.0).astype(np.int16)
 
@@ -29,6 +35,34 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
     assert block_ms in (10, 20, 30), "VAD frame must be 10/20/30 ms"
     block_size = int(sr * (block_ms / 1000.0))
 
+    # ——— Audio Effects simple ———
+    effects = AudioEffects(
+        ns=bool(cfg_audio.get("ns", True)),
+        agc=bool(cfg_audio.get("agc", True)),
+        hpf=bool(cfg_audio.get("hpf", True)),
+    )
+
+    # ——— AEC WebRTC (opțional, doar dacă aec_mode=webrtc și clasa există) ———
+    aec = None
+    if (str(cfg_audio.get("aec_mode", "system")).lower() == "webrtc") and WebRTCAEC:
+        try:
+            aec = WebRTCAEC(sample_rate=sr, frame_ms=block_ms)
+            logger.info("🔁 WebRTC AEC activ (in-app).")
+        except Exception as e:
+            logger.warning(f"Nu pot porni WebRTC AEC: {e}. Continui fără AEC.")
+            aec = None
+    else:
+        # Folosești AEC de sistem (PulseAudio/pipewire echo-cancel) dacă e disponibil
+        pass
+
+    # ——— Device selection ———
+    dev_index = choose_input_device(
+    prefer_echo_cancel=bool(cfg_audio.get("prefer_echo_cancel", True)),
+    hint=str(cfg_audio.get("input_device_hint", "") or ""),
+    index=(cfg_audio.get("input_device_index") if cfg_audio.get("input_device_index") not in (None, "") else None),
+    logger=logger
+)
+
     q = queue.Queue()
     vad = VAD(sr, cfg_audio.get("vad_aggressiveness", 2), block_ms)
 
@@ -42,8 +76,14 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
             logger.debug(f"Audio status: {status}")
         q.put(indata.copy())
 
-    with sd.InputStream(channels=1, samplerate=sr, blocksize=block_size,
-                        dtype="float32", callback=callback):
+    with sd.InputStream(
+        channels=1,
+        samplerate=sr,
+        blocksize=block_size,
+        dtype="float32",
+        callback=callback,
+        device=dev_index  # <- poate fi None (default OS)
+    ):
         while True:
             try:
                 block = q.get(timeout=0.5)  # float32 [-1,1], mono
@@ -53,6 +93,17 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
                 continue
 
             pcm_i16 = _float_to_int16(block[:, 0])
+
+            # AEC (opțional, dacă există)
+            if aec:
+                try:
+                    pcm_i16 = aec.process_frame(pcm_i16)
+                except Exception:
+                    pass
+
+            # Igienă audio înainte de VAD
+            pcm_i16 = effects.process_frame(pcm_i16)
+
             collected.append(pcm_i16)
 
             # VAD pe bytes little-endian
@@ -66,6 +117,12 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
                 break
             if time.time() - started > max_secs:
                 break
+
+    if aec:
+        try:
+            aec.close()
+        except Exception:
+            pass
 
     audio = np.concatenate(collected, axis=0) if collected else np.zeros(1, dtype=np.int16)
     out_wav_path.parent.mkdir(parents=True, exist_ok=True)

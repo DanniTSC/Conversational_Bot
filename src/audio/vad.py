@@ -1,11 +1,13 @@
 
-import webrtcvad
 import warnings
 warnings.filterwarnings(
     "ignore",
     message=r"pkg_resources is deprecated as an API.*",
     category=UserWarning,
 )
+import webrtcvad
+
+
 
 
 class VAD:
