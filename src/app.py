@@ -95,6 +95,9 @@ def main():
             # ——— Wake confirm ———
             logger.info(f"🔔 Wake phrase detectată: {matched}")
             wake_triggers.inc()
+            matched_norm = normalize_text(matched)
+            ro_phrases = [normalize_text(p) for p in cfg["wake"]["wake_phrases"] if "robot" in p and any(x in p.lower() for x in ["salut","hei","bun"])]
+            heard_lang = "ro" if any(matched_norm == rp for rp in ro_phrases) else "en"
             ack = ack_ro if heard_lang == "ro" else ack_en
             tts_speak_calls.inc()
             tts.say(ack, lang=heard_lang)
@@ -146,7 +149,7 @@ def main():
                 try:
                     ut = normalize_text(user_text)
                     bt = normalize_text(last_bot_reply)
-                    if len(ut) > 8 and len(bt) > 8:
+                    if len(ut) > 8 and len(bt) > 8: #poate > 9 cam restrictiv mai mare de 8
                         sim = fuzz.partial_ratio(ut, bt)
                         if sim >= 85:
                             logger.info(f"🔇 Ignor input (eco TTS) sim={sim}")

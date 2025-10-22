@@ -12,7 +12,7 @@ prefer_echo_cancel: true
 input_device_hint: "ec_mic"          # ex: "echo-cancel" sau "easyeffects source"
 
 # AEC: system | webrtc | off
-aec_mode: system               # <- activăm AEC WebRTC în aplicație
+aec_mode: system               # <- activăm AEC din OS
 monitor_device_hint: ""        # ex: "monitor" / "loopback" / "stereo mix"
 
 # Filtre „ușoare” din cod – când avem AEC WebRTC, le dezactivăm automat (evităm dublajul)

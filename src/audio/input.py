@@ -61,7 +61,7 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
     hint=str(cfg_audio.get("input_device_hint", "") or ""),
     index=(cfg_audio.get("input_device_index") if cfg_audio.get("input_device_index") not in (None, "") else None),
     logger=logger
-)
+    )
 
     q = queue.Queue()
     vad = VAD(sr, cfg_audio.get("vad_aggressiveness", 2), block_ms)

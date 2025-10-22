@@ -1,3 +1,4 @@
+# src/core/config_schema.py
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 
@@ -18,6 +19,7 @@ class AudioCfg(BaseModel):
         return v
 
 class ASRCfg(BaseModel):
+    # permite câmpuri 'model_*' fără warning
     model_config = ConfigDict(protected_namespaces=())
     provider: str = Field("faster")                 # faster | openai
     model_size: str = Field("base")
@@ -38,12 +40,29 @@ class LLMCfg(BaseModel):
     default_mode: Optional[str] = Field("precise")
     strict_facts: Optional[bool] = Field(True)
 
+class PiperCfg(BaseModel):
+    # IMPORTANT: dezactivăm namespace-ul 'model_' ca să nu apară warning-urile
+    model_config = ConfigDict(protected_namespaces=(), extra="allow")
+    exe: Optional[str] = None
+    model_ro: Optional[str] = None
+    config_ro: Optional[str] = None
+    model_en: Optional[str] = None
+    config_en: Optional[str] = None
+    speaker_id: Optional[int] = None
+    length_scale: float = 1.0
+    noise_scale: float = 0.667
+    noise_w: float = 0.8
+    sentence_silence_ms: int = 80
+
 class TTSCfg(BaseModel):
+    # păstrăm blocul piper: din YAML
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
     backend: str = Field("pyttsx3")
     rate: int = Field(180, ge=60, le=400)
     volume: float = Field(0.9, ge=0.0, le=1.0)
     voice_ro_hint: Optional[str] = Field("ro")
     voice_en_hint: Optional[str] = Field("en")
+    piper: Optional[PiperCfg] = None
 
 class WakeCfg(BaseModel):
     wake_phrases: List[str]
@@ -66,5 +85,6 @@ class AppCfg(BaseModel):
     paths: PathsCfg
 
 def validate_all(raw: dict) -> dict:
+    """Validează schema și întoarce dict-ul simplu (pentru consum în app)."""
     model = AppCfg(**raw)
     return model.model_dump()
