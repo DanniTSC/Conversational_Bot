@@ -1,5 +1,7 @@
 sample_rate: 16000
-block_ms: 30          # 10 / 20 / 30 ms (webrtcvad acceptă doar aceste valori)
-vad_aggressiveness: 2 # 0..3 (3 = mai agresiv)
-silence_ms_to_end: 600
-max_record_seconds: 30
+block_ms: 20                # 10/20/30 – 20ms răspunde mai rapid decât 30
+vad_aggressiveness: 2       # 0..3 (3 = mai agresiv, taie mai ușor)
+silence_ms_to_end: 500      # închide propoziția mai repede
+max_record_seconds: 15
+session_idle_seconds: 12
+min_valid_seconds: 0.5      # minim util ca să nu pornești pe „puf”

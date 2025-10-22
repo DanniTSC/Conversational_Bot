@@ -3,6 +3,7 @@ from src.core.states import BotState
 from src.core.logger import setup_logger
 from src.core.config import load_all
 from src.audio.input import record_until_silence
+from src.asr import make_asr 
 from src.asr.engine_openai import ASREngine
 from src.llm.engine import LLMLocal
 from src.tts.engine import TTSLocal
@@ -11,6 +12,12 @@ from src.telemetry.metrics import boot_metrics
 from src.utils.textnorm import normalize_text
 from pathlib import Path
 import time
+from src.telemetry.metrics import (
+    boot_metrics, asr_latency, llm_latency, llm_first_token_latency,
+    tts_latency, round_trip, wake_triggers, sessions_started,
+    sessions_ended, interactions, unknown_answer, errors_total,
+    tts_speak_calls, observe_hist
+)
 
 
 LANG_MAP = {"ro": "ro", "en": "en"}
@@ -42,12 +49,7 @@ def main():
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Engines
-    asr = ASREngine(
-        cfg["asr"]["model_size"],
-        cfg["asr"]["compute_type"],
-        cfg["asr"].get("device", "cpu"),
-        cfg["asr"].get("force_language"),   # opțional: en/ro/None
-    )
+    asr = make_asr(cfg["asr"], logger)
     llm = LLMLocal(cfg["llm"], logger)
     tts = TTSLocal(cfg["tts"], logger)
 
@@ -100,7 +102,7 @@ def main():
             # ——— SESIUNE MULTI-TURN până la "ok bye" sau timeout ———
             ask_cfg = dict(cfg["audio"])
             ask_cfg.update({
-                "silence_ms_to_end": 1000,   # nu tăia finalul propozițiilor
+                "silence_ms_to_end": 800,   # nu tăia finalul propozițiilor
                 "max_record_seconds": 10,
                 "vad_aggressiveness": 2,     # mai iertător în conversație
             })

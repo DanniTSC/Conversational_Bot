@@ -1,15 +1,14 @@
-# src/config_schema.py
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 
 class AudioCfg(BaseModel):
     sample_rate: int = Field(16000, ge=8000, le=48000)
-    block_ms: int = Field(30)
+    block_ms: int = Field(20)
     vad_aggressiveness: int = Field(2, ge=0, le=3)
-    silence_ms_to_end: int = Field(600, ge=100, le=5000)
-    max_record_seconds: int = Field(30, ge=1, le=300)
+    silence_ms_to_end: int = Field(500, ge=100, le=5000)
+    max_record_seconds: int = Field(15, ge=1, le=300)
     session_idle_seconds: Optional[int] = Field(12, ge=3, le=120)
-    min_valid_seconds: Optional[float] = Field(0.7, ge=0.0, le=3.0)
+    min_valid_seconds: Optional[float] = Field(0.5, ge=0.0, le=3.0)
 
     @field_validator("block_ms")
     @classmethod
@@ -20,11 +19,13 @@ class AudioCfg(BaseModel):
 
 class ASRCfg(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+    provider: str = Field("faster")                 # faster | openai
     model_size: str = Field("base")
-    compute_type: Optional[str] = Field("int8")
-    device: str = Field("cpu")
+    compute_type: Optional[str] = Field("int8")     # int8 | float16 | int8_float16
+    device: str = Field("cpu")                      # cpu | cuda
     beam_size: Optional[int] = Field(1, ge=1, le=8)
     force_language: Optional[str] = None
+    vad_min_silence_ms: int = Field(300, ge=100, le=1500)
 
 class LLMCfg(BaseModel):
     provider: str = Field("ollama")
@@ -65,6 +66,5 @@ class AppCfg(BaseModel):
     paths: PathsCfg
 
 def validate_all(raw: dict) -> dict:
-    """Returnează dict validat (cu valori normalizate). Ridică ValueError dacă invalid."""
     model = AppCfg(**raw)
     return model.model_dump()
