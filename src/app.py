@@ -47,11 +47,13 @@ def is_goodbye(text: str) -> bool:
     t = normalize_text(text)
     if not t:
         return False
-    bye_phrases = [
-        "ok bye", "okay bye", "bye", "goodbye", "stop", "cancel", "enough",
-        "gata", "la revedere", "opreste", "oprim", "terminam", "pa"
-    ]
-    return any(p in t for p in bye_phrases)
+    # doar potriviri exacte; eliminăm "pa" ca să nu prindă "paine", "paravan" etc.
+    bye_exact = {
+        "ok bye", "okay bye", "bye", "goodbye",
+        "stop", "cancel", "enough",
+        "gata", "la revedere", "opreste", "oprim", "terminam"
+    }
+    return t in bye_exact
 
 
 def main():
@@ -153,12 +155,13 @@ def main():
                     "silence_ms_to_end": 1000,
                     "max_record_seconds": 4,
                     "vad_aggressiveness": 3,
+                    "min_valid_seconds": 0.7,
                 })
                 standby_wav = data_dir / "cache" / "standby.wav"
                 standby_wav.parent.mkdir(parents=True, exist_ok=True)
                 path, dur = record_until_silence(standby_cfg, standby_wav, logger)
 
-                if dur < float(cfg["audio"].get("min_valid_seconds", 0.7)):
+                if dur < float(standby_cfg.get("min_valid_seconds", 0.7)):
                     logger.info(f"⏭️ standby prea scurt (dur={dur:.2f}s) — reiau")
                     continue
 
@@ -280,17 +283,25 @@ def main():
                     min_chunk_chars=60,
                 )
 
-                # BARGE-IN
-                barge = BargeInListener(cfg["audio"], logger)
-                try:
+                # BARGE-IN în timpul TTS (protejată anti-eco și cu arm-delay)
+                if not bool(cfg["audio"].get("barge_enabled", True)):
                     while tts.is_speaking():
-                        if barge.heard_speech(need_ms=300):
-                            logger.info("⛔ Barge-in detectat — opresc TTS și trec la listening.")
-                            tts.stop()
-                            break
-                        time.sleep(0.03)
-                finally:
-                    barge.close()
+                        time.sleep(0.05)
+                elif not bool(cfg["audio"].get("barge_allow_during_tts", True)):
+                    while tts.is_speaking():
+                        time.sleep(0.05)
+                else:
+                    barge = BargeInListener(cfg["audio"], logger)
+                    try:
+                        while tts.is_speaking():
+                            need = int(cfg["audio"].get("barge_min_voice_ms", 650))
+                            if barge.heard_speech(need_ms=need):
+                                logger.info("⛔ Barge-in detectat — opresc TTS și trec la listening.")
+                                tts.stop()
+                                break
+                            time.sleep(0.03)
+                    finally:
+                        barge.close()
 
                 last_bot_reply = "".join(reply_buf)
                 last_activity = time.time()

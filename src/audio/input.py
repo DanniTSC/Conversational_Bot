@@ -1,12 +1,12 @@
 # src/audio/input.py
 import queue, time, struct
 from pathlib import Path
-from .devices import choose_input_device, list_input_devices 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+
+from .devices import choose_input_device, list_input_devices
 from .vad import VAD
-from .devices import choose_input_device
 from .processing import AudioEffects
 
 # Import opțional: nu crăpa dacă nu există webrtc AEC
@@ -25,12 +25,16 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
     """
     Înregistrează mono 16kHz și se oprește după `silence_ms_to_end` ms de liniște
     (detectată de VAD) sau după `max_record_seconds` (fallback).
-    Returnează (path, durată_sec).
+
+    Anti-spam: dacă vocea cumulată < `min_valid_seconds` -> NU salvează fișierul, întoarce voice_sec.
+
+    Returnează: (path, voice_seconds)
     """
     sr = int(cfg_audio["sample_rate"])
     block_ms = int(cfg_audio["block_ms"])              # 10/20/30 ms
     silence_ms_to_end = int(cfg_audio["silence_ms_to_end"])
     max_secs = int(cfg_audio["max_record_seconds"])
+    min_valid_seconds = float(cfg_audio.get("min_valid_seconds", 0.5))
 
     assert block_ms in (10, 20, 30), "VAD frame must be 10/20/30 ms"
     block_size = int(sr * (block_ms / 1000.0))
@@ -57,10 +61,10 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
 
     # ——— Device selection ———
     dev_index = choose_input_device(
-    prefer_echo_cancel=bool(cfg_audio.get("prefer_echo_cancel", True)),
-    hint=str(cfg_audio.get("input_device_hint", "") or ""),
-    index=(cfg_audio.get("input_device_index") if cfg_audio.get("input_device_index") not in (None, "") else None),
-    logger=logger
+        prefer_echo_cancel=bool(cfg_audio.get("prefer_echo_cancel", True)),
+        hint=str(cfg_audio.get("input_device_hint", "") or ""),
+        index=(cfg_audio.get("input_device_index") if cfg_audio.get("input_device_index") not in (None, "") else None),
+        logger=logger
     )
 
     q = queue.Queue()
@@ -69,6 +73,7 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
     logger.info(f"🎤 Vorbește… (se oprește după {silence_ms_to_end}ms de liniște)")
     started = time.time()
     last_voice_ms = 0
+    voiced_ms_total = 0       # — cumulăm DOAR timpul de voce detectată (anti-spam)
     collected = []
 
     def callback(indata, frames, time_info, status):
@@ -110,6 +115,7 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
             pcm_bytes = struct.pack("<%dh" % len(pcm_i16), *pcm_i16)
             if vad.is_speech(pcm_bytes):
                 last_voice_ms = 0
+                voiced_ms_total += block_ms
             else:
                 last_voice_ms += block_ms
 
@@ -125,8 +131,15 @@ def record_until_silence(cfg_audio: dict, out_wav_path: Path, logger):
             pass
 
     audio = np.concatenate(collected, axis=0) if collected else np.zeros(1, dtype=np.int16)
+    voice_sec = voiced_ms_total / 1000.0
+
+    # — dacă vocea efectivă este sub prag -> NU salvăm nimic (anti-spam)
+    if voice_sec < min_valid_seconds:
+        logger.info(f"⏭️ Utterance prea scurt (voce ~{voice_sec:.2f}s < {min_valid_seconds:.2f}s) — ignor, nu salvez.")
+        return str(out_wav_path), voice_sec
+
     out_wav_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_wav_path), audio, sr, subtype="PCM_16")
     dur = len(audio) / sr
-    logger.info(f"✅ Înregistrare salvată: {out_wav_path} (~{dur:.2f}s)")
-    return str(out_wav_path), dur
+    logger.info(f"✅ Înregistrare salvată: {out_wav_path} (audio ~{dur:.2f}s, voce ~{voice_sec:.2f}s)")
+    return str(out_wav_path), voice_sec
