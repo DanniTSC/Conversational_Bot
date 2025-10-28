@@ -24,13 +24,13 @@ from src.telemetry.metrics import (
 
 LANG_MAP = {"ro": "ro", "en": "en"}
 
-# 1) încarcă .env din CWD, dacă există (nu suprascrie variabilele din shell)
+# 1) încarcă .env din CWD (nu suprascrie ENV deja setate)
 load_dotenv(find_dotenv(".env", usecwd=True), override=False)
 
-# 2) root = repo root (src/app.py -> .. = Conversational_Bot)
+# 2) root = Conversational_Bot
 ROOT = Path(__file__).resolve().parents[1]
 
-# 3) încearcă și repo/.env (opțional) + configs/.env (cheile tale sunt aici)
+# 3) încearcă și repo/.env + configs/.env
 load_dotenv(ROOT / ".env", override=False)
 load_dotenv(ROOT / "configs" / ".env", override=False)
 
@@ -73,34 +73,50 @@ def main():
     ack_ro = cfg["wake"]["acknowledgement"]["ro"]
     ack_en = cfg["wake"]["acknowledgement"]["en"]
 
-    # Porcupine env (preferă ENV, dar cade înapoi pe YAML)
+    # -------- Porcupine config + fallback sigur --------
     WAKE_ENGINE = (os.getenv("WAKE_ENGINE") or cfg["wake"].get("engine") or "auto").lower()
 
     PV_KEY = (
         os.getenv("PICOVOICE_ACCESS_KEY", "").strip()
         or (cfg["wake"].get("porcupine", {}) or {}).get("access_key", "").strip()
     )
-
-    # ia primul keyword_path din YAML dacă nu e setat în ENV
     PPN_PATH = (
         os.getenv("PORCUPINE_PPN", "").strip()
         or next(iter((cfg["wake"].get("porcupine", {}) or {}).get("keyword_paths", []) or []), "")
     )
-
     PORC_SENS = float(os.getenv("PORCUPINE_SENSITIVITY", "0.6"))
     PORC_LANG = (os.getenv("PORCUPINE_LANG", "en") or "en").lower()
 
+    missing = []
+    if not PV_KEY:
+        missing.append("PICOVOICE_ACCESS_KEY")
+    if not PPN_PATH:
+        missing.append("PORCUPINE_PPN")
+    elif not Path(PPN_PATH).exists():
+        missing.append(f"ppn missing: {PPN_PATH}")
+
+    # Politică de selectare:
+    # - 'porcupine' -> doar dacă cheile/fișierul sunt valide; altfel fallback la text + warning
+    # - 'auto' -> porcupine dacă e configurat complet; altfel text
     use_porcupine = False
     if WAKE_ENGINE == "porcupine":
-        use_porcupine = True
+        if not missing:
+            use_porcupine = True
+        else:
+            logger.warning(f"🔕 Porcupine cerut, dar lipsesc: {', '.join(missing)} — fac fallback pe wake via text (ASR).")
+            use_porcupine = False
     elif WAKE_ENGINE == "auto":
-        use_porcupine = bool(PV_KEY and PPN_PATH and Path(PPN_PATH).exists())
+        use_porcupine = (len(missing) == 0)
     else:
         use_porcupine = False
 
     logger.info(f"🔔 Wake engine: {'porcupine' if use_porcupine else 'text'}")
     if not use_porcupine:
-        logger.info("ℹ️ Hint: setează PICOVOICE_ACCESS_KEY și PORCUPINE_PPN în configs/.env sau WAKE_ENGINE=porcupine.")
+        logger.info("ℹ️ Hint: setează PICOVOICE_ACCESS_KEY și PORCUPINE_PPN în configs/.env sau engine=asr.")
+
+    # „circuit breaker”: dacă Porcupine eșuează repetat la runtime -> trecem pe text până la repornire
+    porcupine_failures = 0
+    PORCUPINE_MAX_FAILS = 3
 
     logger.info("🤖 Standby: spune „hello robot” sau „salut robot” ca să pornești conversația.")
     state = BotState.LISTENING
@@ -108,7 +124,7 @@ def main():
 
     try:
         while True:
-            # —— STANDBY: Porcupine (dacă e activ) ——
+            # —— STANDBY: Porcupine (dacă e activ și nu s-a „ars” breaker-ul) ——
             if use_porcupine:
                 ok = wait_for_wake_porcupine(
                     cfg_audio=cfg["audio"],
@@ -119,10 +135,16 @@ def main():
                     timeout_seconds=None
                 )
                 if not ok:
+                    porcupine_failures += 1
+                    if porcupine_failures >= PORCUPINE_MAX_FAILS:
+                        logger.warning("⚠️ Porcupine a eșuat repetat — comut pe wake via text pentru sesiunea curentă.")
+                        use_porcupine = False
+                    time.sleep(0.1)
                     continue
+                porcupine_failures = 0
                 matched = "wake-porcupine"
                 heard_lang = "ro" if PORC_LANG.startswith("ro") else "en"
-                logger.info(f"🔔 Wake phrase detectată (porcupine)")
+                logger.info("🔔 Wake phrase detectată (porcupine)")
                 wake_triggers.inc()
             else:
                 # —— STANDBY: text-ASR + fuzzy match ——
@@ -158,7 +180,8 @@ def main():
                 logger.info(f"🔔 Wake phrase detectată: {matched}")
                 wake_triggers.inc()
                 matched_norm = normalize_text(matched)
-                ro_phrases = [normalize_text(p) for p in cfg["wake"]["wake_phrases"] if "robot" in p and any(x in p.lower() for x in ["salut","hei","bun"])]
+                ro_phrases = [normalize_text(p) for p in cfg["wake"]["wake_phrases"]
+                              if "robot" in p and any(x in p.lower() for x in ["salut","hei","bun"])]
                 heard_lang = "ro" if any(matched_norm == rp for rp in ro_phrases) else "en"
 
             # —— Wake confirm ——

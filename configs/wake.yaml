@@ -1,4 +1,5 @@
 engine: porcupine    # porcupine | asr
+threshold: 60
 wake_phrases:
   - "hello robot"
   - "hey robot"
