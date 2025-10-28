@@ -28,3 +28,7 @@ prometheus_client==0.20.0
 pydantic==2.8.2
 python-json-logger==2.0.7
 rich==13.7.1
+
+#wake word
+pvporcupine==3.0.2
+python-dotenv==1.0.1

@@ -19,7 +19,6 @@ class AudioCfg(BaseModel):
         return v
 
 class ASRCfg(BaseModel):
-    # permite câmpuri 'model_*' fără warning
     model_config = ConfigDict(protected_namespaces=())
     provider: str = Field("faster")                 # faster | openai
     model_size: str = Field("base")
@@ -41,7 +40,6 @@ class LLMCfg(BaseModel):
     strict_facts: Optional[bool] = Field(True)
 
 class PiperCfg(BaseModel):
-    # IMPORTANT: dezactivăm namespace-ul 'model_' ca să nu apară warning-urile
     model_config = ConfigDict(protected_namespaces=(), extra="allow")
     exe: Optional[str] = None
     model_ro: Optional[str] = None
@@ -55,7 +53,6 @@ class PiperCfg(BaseModel):
     sentence_silence_ms: int = 80
 
 class TTSCfg(BaseModel):
-    # păstrăm blocul piper: din YAML
     model_config = ConfigDict(extra="allow", protected_namespaces=())
     backend: str = Field("pyttsx3")
     rate: int = Field(180, ge=60, le=400)
@@ -64,9 +61,17 @@ class TTSCfg(BaseModel):
     voice_en_hint: Optional[str] = Field("en")
     piper: Optional[PiperCfg] = None
 
+class PorcupineCfg(BaseModel):
+    enabled: bool = False
+    access_key: Optional[str] = None
+    ppn_path: Optional[str] = None
+    sensitivity: float = 0.6
+    lang_hint: Optional[str] = Field("auto")  # "auto" | "en" | "ro"
+
 class WakeCfg(BaseModel):
     wake_phrases: List[str]
     acknowledgement: Dict[str, str]
+    porcupine: Optional[PorcupineCfg] = None
 
 class RouteCfg(BaseModel):
     rules: List[Dict[str, Any]] = []
@@ -85,6 +90,5 @@ class AppCfg(BaseModel):
     paths: PathsCfg
 
 def validate_all(raw: dict) -> dict:
-    """Validează schema și întoarce dict-ul simplu (pentru consum în app)."""
     model = AppCfg(**raw)
     return model.model_dump()

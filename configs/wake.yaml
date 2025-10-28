@@ -1,11 +1,24 @@
+engine: porcupine    # porcupine | asr
 wake_phrases:
   - "hello robot"
   - "hey robot"
   - "salut robot"
   - "hei robot"
-  - "bună robot"
   - "buna robot"
 
 acknowledgement:
   ro: "Da, te ascult."
   en: "Yes, I'm listening."
+
+porcupine:
+  # Obligatoriu: cheie Picovoice (set-o aici sau prin env PICOVOICE_ACCESS_KEY)
+  access_key: "${PICOVOICE_ACCESS_KEY}"
+
+  # Variante:
+  # 1) custom keyword(s) .ppn — recomandat pt 'hello robot'
+  keyword_paths:
+    - "/home/dani/Hello-Robot_en_linux_v3_0_0/Hello-Robot_en_linux_v3_0_0.ppn"
+  keywords:
+    - "porcupine"
+  
+  sensitivities: [0.6]
