@@ -15,6 +15,7 @@ from src.tts.engine import TTSLocal
 from src.core.wake import WakeDetector
 from src.utils.textnorm import normalize_text
 from src.audio.wake_porcupine import wait_for_wake as wait_for_wake_porcupine
+from src.llm.stream_shaper import shape_stream  # <<— shaper pentru streaming mai fluid
 
 from src.telemetry.metrics import (
     boot_metrics, round_trip, wake_triggers, sessions_started,
@@ -262,10 +263,18 @@ def main():
                 interactions.inc()
                 rt_start = time.perf_counter()
 
+                # === Debug dir per sesiune ===
+                from datetime import datetime
+                from src.utils.debug_speech import DebugSpeech
+                session_dir = data_dir / "debug" / datetime.now().strftime("%Y%m%d_%H%M%S")
+                debugger = DebugSpeech(session_dir, user_lang, logger)
+                debugger.write_asr(user_text)
+
                 reply_buf = []
 
                 def _capture(gen):
-                    for tok in gen:
+                    # tee generatorul cu debugger.tee
+                    for tok in debugger.tee(gen):
                         reply_buf.append(tok)
                         yield tok
 
@@ -273,14 +282,18 @@ def main():
                 token_iter = _capture(token_iter_raw)
 
                 def _mark_tts_start():
+                    # round-trip metric
                     round_trip.observe(time.perf_counter() - rt_start)
+                    # debug hook
+                    debugger.on_tts_start()
 
                 state = BotState.SPEAKING
+                tts_speak_calls.inc()
                 tts.say_async_stream(
                     token_iter,
                     lang=user_lang,
                     on_first_speak=_mark_tts_start,
-                    min_chunk_chars=60,
+                    min_chunk_chars=int(cfg["tts"].get("min_chunk_chars", 60)),
                 )
 
                 # BARGE-IN în timpul TTS (protejată anti-eco și cu arm-delay)
@@ -303,7 +316,11 @@ def main():
                     finally:
                         barge.close()
 
+                # finalizează logurile
+                debugger.on_tts_end()
                 last_bot_reply = "".join(reply_buf)
+                debugger.finish()
+
                 last_activity = time.time()
 
             # —— ieșire din sesiune => standby ——
