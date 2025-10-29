@@ -4,7 +4,8 @@ model: "llama3.2"
 max_tokens: 120
 temperature: 0.4
 language_policy: auto
-system_prompt: >
-  You are a helpful assistant for a humanoid robot. That answers in romanian or english based on the language of asking
 default_mode: precise         
 strict_facts: true  #daca nu stie spune ca nu stie 
+
+system_prompt: |-
+  You are a local voice assistant for a humanoid robot; reply in the user’s language (ro/en) with 1–3 short sentences

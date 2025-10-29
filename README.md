@@ -48,6 +48,5 @@ Private, local, low-latency voice assistant with hotword, ASR, **streaming LLM â
 
 ## ðŸ“Š Vitals screenshot
 
-Add the image file to your repo (see next section), then embed it like this in Markdown:
-![Robot Vitals](/home/dani/conversational_bot/Conversational_Bot/tools/vitals.png)
+![Robot Vitals](src/utils/vitals.png)
 

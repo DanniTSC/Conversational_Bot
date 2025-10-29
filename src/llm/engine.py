@@ -47,11 +47,9 @@ class LLMLocal:
 
     def generate_stream(self, user_text: str, lang_hint: str = "en", mode: Optional[str] = None):
         mode = (mode or self.default_mode).lower()
-        # time-to-first-token
         if self.provider == "ollama":
             gen = self._ollama_stream(user_text, lang_hint, mode)
             return wrap_stream_for_first_token(gen, llm_first_token_latency)
-        # fallback: non-stream
         def _one():
             yield self.generate(user_text, lang_hint, mode)
         return _one()
@@ -62,13 +60,16 @@ class LLMLocal:
         return f"{'Am înțeles' if lang_hint.startswith('ro') else 'I heard'}: \"{user_text}\"."
 
     def _ollama_http(self, user_text: str, lang_hint: str, mode: str = "precise") -> str:
+        unknown_en = "That’s outside my current knowledge, but I’ll note it for improvement."
+        unknown_ro = "Interesant, Nu am răspunsul încă, dar exact întrebări ca asta mă ajută să devin mai bun."
+        unknown = unknown_ro if str(lang_hint).lower().startswith("ro") else unknown_en
+
         url = f"{self.host.rstrip('/')}/api/generate"
 
         if mode == "precise":
             safety = (
                 "IMPORTANT: Answer only with verified facts. "
-                "If you are uncertain or the information may be outdated, say "
-                "'Nu știu cu certitudine' and suggest checking a reliable source. "
+                f"If you are uncertain or the information may be outdated, reply exactly with: '{unknown}' and suggest checking a reliable source. "
                 "Never invent names, dates, or sources. Be concise."
             )
             temperature = 0.0; top_p = 0.9; top_k = 40
@@ -97,19 +98,23 @@ class LLMLocal:
             data = resp.json()
             text = (data.get("response") or "").strip()
             if self.strict_facts and not text:
-                return "Nu știu cu certitudine. Vrei să verific o sursă?"
+                return unknown
             return text or "…"
         except Exception as e:
             self.log.error(f"Ollama HTTP error: {e}")
             return self._rule_based(user_text, lang_hint)
 
     def _ollama_stream(self, user_text: str, lang_hint: str, mode: str = "precise"):
+        unknown_en = "That’s outside my current knowledge, but I’ll note it for improvement."
+        unknown_ro = "Interesant, Nu am răspunsul încă, dar exact întrebări ca asta mă ajută să devin mai bun."
+        unknown = unknown_ro if str(lang_hint).lower().startswith("ro") else unknown_en
+
         url = f"{self.host.rstrip('/')}/api/generate"
 
         if mode == "precise":
             safety = (
                 "IMPORTANT: Answer only with verified facts. "
-                "If uncertain or outdated, reply exactly with: 'Nu știu cu certitudine.' "
+                f"If uncertain or outdated, reply exactly with: '{unknown}' "
                 "Keep answers concise."
             )
             temperature = 0.0; top_p = 0.9; top_k = 40
