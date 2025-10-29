@@ -88,6 +88,7 @@ pactl info | sed -n -e 's/^Default Sink: /Default Sink: /p' -e 's/^Default Sourc
 pactl unload-module module-echo-cancel 2>/dev/null || true
 
 # 3️⃣ Load WebRTC echo-cancel on defaults
+<code>
 DEFAULT_SINK="$(pactl info | awk -F': ' '/Default Sink/{print $2}')"
 DEFAULT_SOURCE="$(pactl info | awk -F': ' '/Default Source/{print $2}')"
 
@@ -99,6 +100,7 @@ pactl load-module module-echo-cancel \
   source_master="$DEFAULT_SOURCE" \
   sink_name=ec_speaker \
   source_name=ec_mic
+</<code>>
 
 # 4️⃣ Set ec_mic as default mic
 pactl set-default-source ec_mic
