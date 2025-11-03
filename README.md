@@ -55,16 +55,10 @@ Private, local, low-latency voice assistant with hotword detection, ASR, **strea
 
 The assistant uses **WebRTC echo cancellation** to avoid detecting its own voice (TTS) as user speech.
 
-TTS (bot voice) ──► ec_speaker ──► Real speakers
-                        │
-                        └──► (reference for AEC)
-                                  │
-User voice + echo ──► Microphone ─┤
-                                  ▼  
-                           AEC removes echo ──► ec_mic ──► app (VAD / ASR / LLM)
+![TTS AEC Schema](src/utils/tts_schema.png)
 
-                           
 
+                      
 ## 📊 Vitals screenshot
 
 ![Robot Vitals](src/utils/vitals.png)
