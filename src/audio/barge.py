@@ -99,11 +99,23 @@ class BargeInListener:
                     self.log.warning("Cobra VAD: lipsește access_key (setează audio.cobra.access_key sau env PICOVOICE_ACCESS_KEY).")
                 else:
                     try:
-                        self._cobra = pvcobra.create(
-                            access_key=ak,
-                            library_path=cobra_cfg.get("library_path"),
-                            model_path=cobra_cfg.get("model_path"),
-                        )
+                        cobra_kwargs = {"access_key": ak}
+                        library_path = (cobra_cfg.get("library_path") or "").strip()
+                        if library_path:
+                            cobra_kwargs["library_path"] = library_path
+                        model_path = (cobra_cfg.get("model_path") or "").strip()
+                        if model_path:
+                            cobra_kwargs["model_path"] = model_path
+
+                        try:
+                            self._cobra = pvcobra.create(**cobra_kwargs)
+                        except TypeError as te:
+                            if "model_path" in cobra_kwargs and "model_path" in str(te):
+                                self.log.warning("Cobra VAD: versiunea curentă nu acceptă model_path — folosesc modelul implicit.")
+                                cobra_kwargs.pop("model_path", None)
+                                self._cobra = pvcobra.create(**cobra_kwargs)
+                            else:
+                                raise
                         self._cobra_frame_len = int(getattr(self._cobra, "frame_length", pvcobra.Cobra.frame_length))
                         cobra_sr = int(getattr(self._cobra, "sample_rate", pvcobra.Cobra.sample_rate))
                     except Exception as e:

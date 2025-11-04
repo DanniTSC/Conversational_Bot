@@ -19,6 +19,7 @@ class DebugSpeech:
         self._buf = []
         self._ttft_ms: Optional[float] = None
         self._started_tts = False
+        self._closed = False
 
         self._asr_f = (self.base_dir / "00_asr.txt").open("w", encoding="utf-8")
         self._llm_f = (self.base_dir / "10_llm_stream.txt").open("w", encoding="utf-8")
@@ -28,11 +29,15 @@ class DebugSpeech:
         self._log(f"# Session {datetime.now().isoformat(timespec='seconds')} lang={lang}")
 
     def _log(self, msg: str):
+        if self._closed:
+            return
         self._sess_f.write(msg.rstrip() + "\n")
         self._sess_f.flush()
         self.logger.debug(msg)
 
     def write_asr(self, text: str):
+        if self._closed:
+            return
         self._asr_f.write((text or "").rstrip() + "\n")
         self._asr_f.flush()
         self._log(f"[ASR] {text}")
@@ -42,17 +47,21 @@ class DebugSpeech:
         self._log(f"[LLM] TTFT={self._ttft_ms:.1f} ms")
 
     def on_token(self, tok: str):
-        if not tok:
+        if not tok or self._closed:
             return
         self._buf.append(tok)
         self._llm_f.write(tok)
         self._llm_f.flush()
 
     def on_tts_start(self):
+        if self._closed:
+            return
         self._started_tts = True
         self._log("[TTS] start")
 
     def on_tts_end(self):
+        if self._closed:
+            return
         self._log("[TTS] end")
 
     def tee(self, gen: Iterable[str]) -> Generator[str, None, None]:
@@ -73,6 +82,8 @@ class DebugSpeech:
             yield tok
 
     def finish(self):
+        if self._closed:
+            return
         text = "".join(self._buf)
         self._spoken_f.write(text)
         self._spoken_f.flush()
@@ -83,3 +94,4 @@ class DebugSpeech:
                 f.close()
             except Exception:
                 pass
+        self._closed = True

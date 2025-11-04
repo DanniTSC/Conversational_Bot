@@ -30,7 +30,7 @@ def choose_input_device(
     """
     # 0) index explicit?
     if index is not None:
-        if logger: logger.info(f"🎙️ selectez input prin index forțat: {index}")
+        if logger: logger.debug(f"🎙️ selectez input prin index forțat: {index}")
         return index
 
     # 1) listă device-uri (pt. debug)
@@ -40,22 +40,22 @@ def choose_input_device(
             logger.warning("Nu pot interoga dispozitivele audio (sounddevice/PortAudio). Folosesc default OS.")
         else:
             names = " | ".join([f"[{i}] {n}" for i, n in devs])
-            logger.info(f"🔎 Input devices: {names}")
+            logger.debug(f"🔎 Input devices: {names}")
 
     # 2) echo-cancel după mai multe pattern-uri
     if prefer_echo_cancel and devs:
         keys = ["echo-cancel", "echo cancel", "cancelled", "ec_mic", "aec"]
         for i, n in devs:
             if any(_match(n, k) for k in keys):
-                if logger: logger.info(f"🎙️ selectez input '{n}' (echo-cancel).")
+                if logger: logger.debug(f"🎙️ selectez input '{n}' (echo-cancel).")
                 return i
 
     # 3) după hint liber
     if hint and devs:
         for i, n in devs:
             if _match(n, hint):
-                if logger: logger.info(f"🎙️ selectez input după hint '{hint}': {n}")
+                if logger: logger.debug(f"🎙️ selectez input după hint '{hint}': {n}")
                 return i
 
-    if logger: logger.info("🎙️ folosesc input audio implicit (OS default).")
+    if logger: logger.debug("🎙️ folosesc input audio implicit (OS default).")
     return None

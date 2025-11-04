@@ -12,7 +12,7 @@ min_valid_seconds: 1.1
 barge_enabled: true
 barge_allow_during_tts: true
 barge_voice_hold_ms: 300          # păstrează "vocea activă" câteva sute ms pentru continuitate
-barge_debug_meter: true            # afișează în log un VU bar în timp ce ascultă (debug)
+barge_debug_meter: false           # afișează în log un VU bar în timp ce ascultă (debug)
 barge_debug_interval_ms: 120       # cât de des actualizează bara (ms)
 barge_voice_drop_ms: 10            # scade bufferul de voce cu 20ms la un bloc fără vorbire
 
@@ -37,8 +37,8 @@ barge_arm_after_ms: 400              # delay după pornirea listener-ului (evit�
 # Cobra VAD (Picovoice) — opțional, pentru detecție robustă de vorbire
 cobra:
   enabled: true
-  threshold: 0.68                    # p(speech) minim pentru a considera blocul ca vorbire
-  hold_ms: 220                       # timp cât păstrează state-ul "în vorbire" după un frame activ
+  threshold: 0.55                   # p(speech) minim pentru a considera blocul ca vorbire
+  hold_ms: 260                      # timp cât păstrează state-ul "în vorbire" după un frame activ
   access_key: "${PICOVOICE_ACCESS_KEY}"
   # library_path: "/path/to/libpv_cobra.so"
   # model_path: "/path/to/cobra_params.pv"
