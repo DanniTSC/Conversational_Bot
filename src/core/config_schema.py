@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 
 class AudioCfg(BaseModel):
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
     sample_rate: int = Field(16000, ge=8000, le=48000)
     block_ms: int = Field(20)
     vad_aggressiveness: int = Field(2, ge=0, le=3)

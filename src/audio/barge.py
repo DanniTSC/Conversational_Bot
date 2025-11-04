@@ -1,10 +1,17 @@
 # src/audio/barge.py - Barge-in inteligent (doar voce umană)
 from __future__ import annotations
+import os
 import sounddevice as sd
 import numpy as np
-import queue, time, struct
+import queue, time, struct, math
+from typing import Optional
 from .vad import VAD
 from .devices import choose_input_device
+
+try:
+    import pvcobra  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    pvcobra = None
 
 def _rms_dbfs(pcm_i16: np.ndarray) -> float:
     """Calculează RMS în dBFS."""
@@ -66,11 +73,64 @@ class BargeInListener:
         self.block_ms = int(cfg_audio["block_ms"])
         self.block = int(self.sr * (self.block_ms / 1000.0))
 
+        # ——— Cobra VAD (opțional) ———
+        cobra_cfg = cfg_audio.get("cobra") or {}
+        cobra_enabled_cfg = cobra_cfg.get("enabled", cfg_audio.get("barge_use_cobra", False))
+        self.cobra_threshold = float(cobra_cfg.get("threshold", cfg_audio.get("barge_cobra_threshold", 0.68)))
+        self.voice_hold_ms = int(cfg_audio.get("barge_voice_hold_ms", cobra_cfg.get("hold_ms", 200)))
+        self._cobra: Optional["pvcobra.Cobra"] = None
+        self._cobra_rem = np.zeros(0, dtype=np.int16)
+        self._cobra_last_prob: float = 0.0
+        self._cobra_last_active_ms: int = 0
+        self.cobra_enabled = False
+        self._cobra_frame_len = 0
+
+        if cobra_enabled_cfg:
+            if pvcobra is None:
+                self.log.warning("Cobra VAD cerut dar library 'pvcobra' lipsește — revin la WebRTC VAD.")
+            else:
+                ak = (
+                    cobra_cfg.get("access_key")
+                    or cfg_audio.get("cobra_access_key")
+                    or os.getenv("PICOVOICE_ACCESS_KEY", "")
+                )
+                ak = (ak or "").strip()
+                if not ak:
+                    self.log.warning("Cobra VAD: lipsește access_key (setează audio.cobra.access_key sau env PICOVOICE_ACCESS_KEY).")
+                else:
+                    try:
+                        self._cobra = pvcobra.create(
+                            access_key=ak,
+                            library_path=cobra_cfg.get("library_path"),
+                            model_path=cobra_cfg.get("model_path"),
+                        )
+                        self._cobra_frame_len = int(getattr(self._cobra, "frame_length", pvcobra.Cobra.frame_length))
+                        cobra_sr = int(getattr(self._cobra, "sample_rate", pvcobra.Cobra.sample_rate))
+                    except Exception as e:
+                        self.log.warning(f"Cobra VAD nu poate fi inițializat ({e}) — revin la WebRTC VAD.")
+                        self._cobra = None
+                    else:
+                        if cobra_sr != self.sr:
+                            self.log.warning(
+                                f"Cobra VAD cere {cobra_sr} Hz dar inputul folosește {self.sr} Hz — dezactivez Cobra."
+                            )
+                            try:
+                                self._cobra.delete()
+                            except Exception:
+                                pass
+                            self._cobra = None
+                        else:
+                            self.cobra_enabled = True
+
+        if not self.cobra_enabled:
+            self.voice_hold_ms = int(cfg_audio.get("barge_voice_hold_ms", 200))
+
         # ——— Praguri temporale ———
         self.min_voice_ms = int(cfg_audio.get("barge_min_voice_ms", 800))
         self.debounce_ms = int(cfg_audio.get("barge_debounce_ms", 150))
         self.cooldown_ms = int(cfg_audio.get("barge_cooldown_ms", 800))
         self.arm_after_ms = int(cfg_audio.get("barge_arm_after_ms", 400))
+        self.voice_drop_ms = int(cfg_audio.get("barge_voice_drop_ms", self.block_ms))
         self._t0_ms = int(time.monotonic() * 1000)
         self._last_trigger_ms = 0
 
@@ -91,10 +151,15 @@ class BargeInListener:
         self.q = queue.Queue()
         self._open_stream()
         self._voiced_ms = 0
+        self._last_user_voice_ms: int = 0
+        self.debug_meter = bool(cfg_audio.get("barge_debug_meter", False))
+        self._debug_interval_ms = int(cfg_audio.get("barge_debug_interval_ms", 120))
+        self._last_meter_ms: int = 0
 
         self.log.info(f"🎯 Barge-in inteligent: min_voice={self.min_voice_ms}ms, "
                       f"rms_thr={self.min_rms_dbfs}dB, hp={self.highpass_hz}Hz, "
-                      f"zcr=[{self.zcr_min},{self.zcr_max}]")
+                      f"zcr=[{self.zcr_min},{self.zcr_max}], "
+                      f"cobra={'on' if self.cobra_enabled else 'off'} (thr={self.cobra_threshold})")
 
     def _open_stream(self):
         def cb(indata, frames, time_info, status):
@@ -108,6 +173,69 @@ class BargeInListener:
         )
         self.stream.start()
 
+    def _cobra_process(self, pcm_i16: np.ndarray) -> bool:
+        """Rulează Cobra pe cadre de frame_length și reține probabilitatea curentă."""
+        if not self.cobra_enabled or self._cobra is None or self._cobra_frame_len <= 0:
+            return False
+
+        data = pcm_i16
+        if self._cobra_rem.size:
+            data = np.concatenate((self._cobra_rem, data))
+
+        idx = 0
+        n = len(data)
+        triggered = False
+        now_ms = int(time.monotonic() * 1000)
+
+        while idx + self._cobra_frame_len <= n:
+            frame = data[idx:idx + self._cobra_frame_len]
+            idx += self._cobra_frame_len
+            try:
+                prob = float(self._cobra.process(frame.tolist()))
+            except Exception as e:
+                self.log.warning(f"Cobra VAD process error: {e} — dezactivez Cobra.")
+                try:
+                    self._cobra.delete()
+                except Exception:
+                    pass
+                self._cobra = None
+                self.cobra_enabled = False
+                self._cobra_rem = np.zeros(0, dtype=np.int16)
+                return False
+
+            self._cobra_last_prob = prob
+            if prob >= self.cobra_threshold:
+                triggered = True
+                self._cobra_last_active_ms = now_ms
+
+        self._cobra_rem = data[idx:]
+        return triggered
+
+    def _debug_meter(self, rms_db: float, cobra_prob: Optional[float], zcr: Optional[float], detected: bool, cobra_hit: bool) -> None:
+        if not self.debug_meter:
+            return
+        now_ms = int(time.monotonic() * 1000)
+        if (now_ms - self._last_meter_ms) < self._debug_interval_ms:
+            return
+        self._last_meter_ms = now_ms
+
+        label = f"rms={rms_db:.1f}dB"
+        value = 0.0
+        if cobra_prob is not None and not math.isnan(cobra_prob):
+            value = max(0.0, min(1.0, cobra_prob))
+            label = f"cobra={cobra_prob:.2f}"
+        else:
+            span = max(5.0, abs(self.min_rms_dbfs))
+            value = max(0.0, min(1.0, (rms_db - self.min_rms_dbfs) / span))
+
+        bar_len = 20
+        filled = min(bar_len, int(round(value * bar_len)))
+        bar = "#" * filled + "-" * (bar_len - filled)
+        zcr_str = f" zcr={zcr:.2f}" if zcr is not None else ""
+        status = "Y" if detected else "n"
+        src = "C" if cobra_hit else "V"
+        self.log.info(f"[BARGE] |{bar}| {label}{zcr_str} det={status}/{src}")
+
     def _is_human_voice(self, pcm_i16: np.ndarray) -> bool:
         """
         Verifică dacă PCM-ul conține voce umană (nu zgomot/eco):
@@ -119,19 +247,44 @@ class BargeInListener:
         # 1) RMS check (anti-eco TTS)
         rms = _rms_dbfs(pcm_i16)
         if rms < self.min_rms_dbfs:
+            self._debug_meter(rms, self._cobra_last_prob if self.cobra_enabled else None, None, False, False)
             return False
 
         # 2) High-pass filtering (anti-zgomot jos-frecvent)
         pcm_filtered = _highpass_filter(pcm_i16, self.highpass_hz, self.sr)
 
-        # 3) Zero-crossing rate (anti-zgomot impulsiv)
-        zcr = _zero_crossing_rate(pcm_filtered)
-        if not (self.zcr_min <= zcr <= self.zcr_max):
-            return False
+        now_ms = int(time.monotonic() * 1000)
 
-        # 4) VAD final check
-        pcm_bytes = struct.pack("<%dh" % len(pcm_filtered), *pcm_filtered)
-        return self.vad.is_speech(pcm_bytes)
+        cobra_detected = False
+        cobra_prob: Optional[float] = None
+        if self.cobra_enabled and self._cobra is not None:
+            cobra_detected = self._cobra_process(pcm_filtered)
+            cobra_prob = self._cobra_last_prob
+            if not cobra_detected and (now_ms - self._cobra_last_active_ms) <= self.voice_hold_ms:
+                cobra_detected = True
+
+        # 3) Zero-crossing rate (anti-zgomot impulsiv)
+        if not cobra_detected:
+            zcr = _zero_crossing_rate(pcm_filtered)
+            if not (self.zcr_min <= zcr <= self.zcr_max):
+                self._debug_meter(rms, cobra_prob, zcr, False, cobra_detected)
+                return False
+        else:
+            zcr = None
+
+        # 4) VAD final check (Cobra sau WebRTC)
+        if cobra_detected:
+            detected = True
+        else:
+            pcm_bytes = struct.pack("<%dh" % len(pcm_filtered), *pcm_filtered)
+            detected = self.vad.is_speech(pcm_bytes)
+            if not detected and (now_ms - self._last_user_voice_ms) <= self.voice_hold_ms:
+                detected = True
+
+        if detected:
+            self._last_user_voice_ms = now_ms
+        self._debug_meter(rms, cobra_prob, zcr, detected, cobra_detected)
+        return detected
 
     def heard_speech(self, need_ms: int = None) -> bool:
         """
@@ -169,10 +322,10 @@ class BargeInListener:
 
             # Verifică dacă e voce umană (nu zgomot/eco)
             if self._is_human_voice(pcm_i16):
-                self._voiced_ms += self.block_ms
+                self._voiced_ms = min(self._voiced_ms + self.block_ms, need_ms)
             else:
-                # Reset dacă nu mai e voce (anti-impuls)
-                self._voiced_ms = 0
+                # Pierde progres gradual (nu reset instant) pentru drop-uri scurte
+                self._voiced_ms = max(0, self._voiced_ms - self.voice_drop_ms)
 
             # Trigger dacă voce continuă >= need_ms
             if self._voiced_ms >= need_ms:
@@ -194,3 +347,17 @@ class BargeInListener:
             self.stream.close()
         except Exception:
             pass
+        if self._cobra is not None:
+            try:
+                self._cobra.delete()
+            except Exception:
+                pass
+            self._cobra = None
+
+    def user_is_speaking(self) -> bool:
+        """Indică dacă recent a fost detectată voce umană (folosit de FastExit)."""
+        now_ms = int(time.monotonic() * 1000)
+        if self.cobra_enabled and self._cobra_last_active_ms:
+            if (now_ms - self._cobra_last_active_ms) <= self.voice_hold_ms:
+                return True
+        return (now_ms - self._last_user_voice_ms) <= self.voice_hold_ms

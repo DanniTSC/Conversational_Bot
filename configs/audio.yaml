@@ -11,12 +11,16 @@ min_valid_seconds: 1.1
 # ——— BARGE-IN INTELIGENT (doar voce umană) ———
 barge_enabled: true
 barge_allow_during_tts: true
+barge_voice_hold_ms: 300          # păstrează "vocea activă" câteva sute ms pentru continuitate
+barge_debug_meter: true            # afișează în log un VU bar în timp ce ascultă (debug)
+barge_debug_interval_ms: 120       # cât de des actualizează bara (ms)
+barge_voice_drop_ms: 10            # scade bufferul de voce cu 20ms la un bloc fără vorbire
 
 # Prag temporal: cât de multă voce continuă trebuie (filtru anti-impuls)
-barge_min_voice_ms: 800              # minim 800ms de voce continuă
+barge_min_voice_ms: 250             # minim 350ms de voce continuă
 
 # Anti-eco TTS: nivelul minim acceptat (vocea e mai tare decât TTS leak)
-barge_min_rms_dbfs: -28              # prag RMS ridicat: doar vorbire puternică
+barge_min_rms_dbfs: -31              # prag RMS ridicat: doar vorbire puternică
 
 # Spectral filtering: ignoră frecvențe joase (bătăi în masă ~50-200 Hz)
 barge_highpass_hz: 300               # taie tot sub 300 Hz (vocea start la ~80-100 Hz, dar energia e la 300+)
@@ -29,6 +33,15 @@ barge_zcr_max: 0.35                  # prag maxim ZCR (anti-zgomot impulsiv îna
 barge_debounce_ms: 150
 barge_cooldown_ms: 800
 barge_arm_after_ms: 400              # delay după pornirea listener-ului (evită scurgeri inițiale)
+
+# Cobra VAD (Picovoice) — opțional, pentru detecție robustă de vorbire
+cobra:
+  enabled: true
+  threshold: 0.68                    # p(speech) minim pentru a considera blocul ca vorbire
+  hold_ms: 220                       # timp cât păstrează state-ul "în vorbire" după un frame activ
+  access_key: "${PICOVOICE_ACCESS_KEY}"
+  # library_path: "/path/to/libpv_cobra.so"
+  # model_path: "/path/to/cobra_params.pv"
 
 # ——— Audio device & AEC ———
 prefer_echo_cancel: true
