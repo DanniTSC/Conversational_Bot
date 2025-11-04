@@ -6,10 +6,10 @@ voice_en_hint: "en"
 
 piper:
   exe: "/home/dani/conversational_bot/Conversational_Bot/.venv/bin/piper"     # verifică cu: which piper
-  model_ro: "/home/dani/voices/ro_RO-mihai-medium.onnx"
-  config_ro: "/home/dani/voices/ro_RO-mihai-medium.onnx.json"
-  model_en: "/home/dani/voices/en_US-amy-medium.onnx"
-  config_en: "/home/dani/voices/en_US-amy-medium.onnx.json"
+  model_ro: "voices/ro_RO-mihai-medium.onnx"
+  config_ro: "voices/ro_RO-mihai-medium.onnx.json"
+  model_en: "voices/en_US-amy-medium.onnx"
+  config_en: "voices/en_US-amy-medium.onnx.json"
   speaker_id: null
   length_scale: 1.0
   noise_scale: 0.667

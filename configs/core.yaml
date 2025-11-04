@@ -1,0 +1,8 @@
+fast_exit:
+  enabled: true
+  phrases: ["ok bye","ok, bye"]
+  fuzzy: 90            
+  debounce_ms: 120     # anti-spam
+  min_chars: 2
+  confirm_tts: "See you later !"   # gol "" dacă nu vrei feedback
+  use_barge_check: true
